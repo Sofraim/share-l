@@ -1,15 +1,12 @@
 import os
 import hashlib
-import subprocess
-from datetime import datetime
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLineEdit,
-    QPushButton, QLabel, QFileDialog
+    QDialog, QVBoxLayout, QLineEdit, QPushButton, QLabel, QFileDialog
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
-from .config import cfg
-from .backends import generate_qr, copy_image_to_clipboard, copy_text_to_clipboard, notify
+from .config import get_secure_temp_file
+from .backends import generate_qr, copy_image_to_clipboard, notify
 
 class QRDialog(QDialog):
     def __init__(self, parent=None):
@@ -33,7 +30,7 @@ class QRDialog(QDialog):
         btn_copy = QPushButton("📋 Скопировать QR в буфер обмена")
         btn_copy.clicked.connect(self.copy_qr)
         layout.addWidget(btn_copy)
-        self.tmp_qr = "/tmp/sharex_qr.png"
+        self.tmp_qr = get_secure_temp_file("qr_", "png")
 
     def make_qr(self):
         txt = self.input_edit.text().strip()
@@ -44,6 +41,14 @@ class QRDialog(QDialog):
         if os.path.exists(self.tmp_qr):
             copy_image_to_clipboard(self.tmp_qr)
             notify("Share-L QR", "QR-код скопирован в буфер обмена!", self.tmp_qr)
+
+    def closeEvent(self, event):
+        if os.path.exists(self.tmp_qr):
+            try:
+                os.remove(self.tmp_qr)
+            except Exception:
+                pass
+        super().closeEvent(event)
 
 class HashDialog(QDialog):
     def __init__(self, parent=None):

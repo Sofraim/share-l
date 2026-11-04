@@ -1,4 +1,5 @@
 import os
+import ast
 import glob
 import subprocess
 from PyQt6.QtWidgets import (
@@ -9,7 +10,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QSize, QTimer, QObject, pyqtSignal
 from PyQt6.QtGui import QPixmap, QIcon, QAction
-from .config import cfg
+from .config import cfg, get_secure_temp_file
 from .backends import (
     capture_full_screen, copy_image_to_clipboard, upload_file,
     run_ocr, decode_qr, copy_text_to_clipboard, notify
@@ -26,8 +27,6 @@ except Exception:
 
 class HotkeyBridge(QObject):
     trigger_region = pyqtSignal()
-    trigger_fullscreen = pyqtSignal()
-    trigger_ocr = pyqtSignal()
 
 
 class ShareLDashboard(QMainWindow):
@@ -80,7 +79,7 @@ class ShareLDashboard(QMainWindow):
         sb_layout.setContentsMargins(10, 14, 10, 14)
         sb_layout.setSpacing(6)
 
-        title_lbl = QLabel("⚡ Share-L")
+        title_lbl = QLabel("⚡ Share-L v1.1")
         title_lbl.setStyleSheet("font-size: 20px; font-weight: bold; color: #00a8fc; padding: 6px 4px;")
         sb_layout.addWidget(title_lbl)
 
@@ -105,9 +104,9 @@ class ShareLDashboard(QMainWindow):
             "📋 История снимков",
             "☑ Задачи после захвата",
             "✨ Эффекты (Тень / Рамка)",
-            "⚙ Настройки и папки",
+            "⚙ Настройки и Хостинги",
             "🛠 Инструменты Share-L",
-            "⌨ Горячие клавиши GNOME"
+            "⌨ Горячие клавиши"
         ]
         for ni in nav_items:
             self.nav_list.addItem(ni)
@@ -212,7 +211,7 @@ class ShareLDashboard(QMainWindow):
             ("task_pin_to_screen", "Автоматически закреплять скриншот поверх всех окон (Pin to Screen)"),
             ("task_run_ocr", "Автоматически распознавать текст (OCR RU/EN) и копировать в буфер"),
             ("task_scan_qr", "Автоматически сканировать QR-коды на скриншоте"),
-            ("task_upload", "Автоматически загружать скриншот на файл-хостинг"),
+            ("task_upload", "Автоматически загружать скриншот на выбранный хостинг / Telegram"),
             ("task_copy_url", "Копировать прямую ссылку в буфер обмена после загрузки"),
             ("task_show_notification", "Показывать системное всплывающее уведомление с превью")
         ]
@@ -323,15 +322,31 @@ class ShareLDashboard(QMainWindow):
 
         layout.addWidget(grp_mag)
 
-        grp_up = QGroupBox("Загрузчик изображений (Destinations)")
+        grp_up = QGroupBox("Загрузчик изображений и интеграция с Telegram (хранится с правами 0600)")
         form_up = QFormLayout(grp_up)
         up_combo = QComboBox()
-        up_combo.addItems(["0x0.st", "x0.at", "catbox.moe"])
+        up_combo.addItems(["0x0.st", "x0.at", "catbox.moe", "telegram", "custom"])
         up_combo.setCurrentText(cfg.get("uploader"))
         up_combo.currentTextChanged.connect(lambda val: cfg.set("uploader", val))
-        form_up.addRow("Сервер загрузки:", up_combo)
-        layout.addWidget(grp_up)
+        form_up.addRow("Куда выгружать (по клавише U):", up_combo)
 
+        tg_tok = QLineEdit(cfg.get("tg_bot_token"))
+        tg_tok.setEchoMode(QLineEdit.EchoMode.Password)
+        tg_tok.setPlaceholderText("123456789:AAH...")
+        tg_tok.textChanged.connect(lambda v: cfg.set("tg_bot_token", v))
+        form_up.addRow("Telegram Bot Token:", tg_tok)
+
+        tg_cid = QLineEdit(cfg.get("tg_chat_id"))
+        tg_cid.setPlaceholderText("ID чата или канала (например, 123456789)")
+        tg_cid.textChanged.connect(lambda v: cfg.set("tg_chat_id", v))
+        form_up.addRow("Telegram Chat ID:", tg_cid)
+
+        sxcu_url = QLineEdit(cfg.get("custom_sxcu_url"))
+        sxcu_url.setPlaceholderText("https://your-domain.com/upload")
+        sxcu_url.textChanged.connect(lambda v: cfg.set("custom_sxcu_url", v))
+        form_up.addRow("Custom HTTPS Upload URL:", sxcu_url)
+
+        layout.addWidget(grp_up)
         layout.addStretch(1)
         return page
 
@@ -376,7 +391,7 @@ class ShareLDashboard(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        grp = QGroupBox("Глобальные горячие клавиши (GNOME Wayland + X11)")
+        grp = QGroupBox("Глобальные горячие клавиши (Безопасное добавление без удаления чужих биндов)")
         vbox = QVBoxLayout(grp)
 
         info = QLabel(
@@ -388,11 +403,11 @@ class ShareLDashboard(QMainWindow):
             "• C — Скопировать HEX-цвет пикселя под лупой\n"
             "• P — Закрепить область поверх всех окон (Pin to Screen)\n"
             "• O — Распознать текст (OCR) в буфер обмена\n"
-            "• U — Загрузить на хостинг и скопировать прямую ссылку"
+            "• U — Загрузить на хостинг / в Telegram"
         )
         vbox.addWidget(info)
 
-        btn_bind = QPushButton("⚡ Перепрописать горячие клавиши в GNOME Wayland")
+        btn_bind = QPushButton("⚡ Прописать горячие клавиши Share-L (сохранив все существующие)")
         btn_bind.setStyleSheet("background-color: #238636; padding: 12px;")
         btn_bind.clicked.connect(lambda: self.bind_gnome_hotkey(silent=False))
         vbox.addWidget(btn_bind)
@@ -410,25 +425,45 @@ class ShareLDashboard(QMainWindow):
                 ["gsettings", "set", "org.gnome.shell.keybindings", "show-screenshot-ui", "[]"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
-            p1 = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/sharex-region/"
-            p2 = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/sharex-gui/"
-            subprocess.run([
-                "gsettings", "set", "org.gnome.settings-daemon.plugins.media-keys",
-                "custom-keybindings", f"['{p1}', '{p2}']"
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            schema = "org.gnome.settings-daemon.plugins.media-keys"
+            p1 = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/share-l-region/"
+            p2 = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/share-l-gui/"
 
-            s1 = f"org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:{p1}"
+            cur_raw = subprocess.check_output(
+                ["gsettings", "get", schema, "custom-keybindings"], text=True
+            ).strip()
+
+            if cur_raw.startswith("@as"):
+                cur_list = []
+            else:
+                try:
+                    cur_list = list(ast.literal_eval(cur_raw))
+                except Exception:
+                    cur_list = []
+
+            cur_list = [p for p in cur_list if "sharex" not in p]
+
+            for p in (p1, p2):
+                if p not in cur_list:
+                    cur_list.append(p)
+
+            subprocess.run(
+                ["gsettings", "set", schema, "custom-keybindings", str(cur_list)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+
+            s1 = f"{schema}.custom-keybinding:{p1}"
             subprocess.run(["gsettings", "set", s1, "name", "Share-L Region Capture"])
             subprocess.run(["gsettings", "set", s1, "command", "/usr/local/bin/share-l --region"])
             subprocess.run(["gsettings", "set", s1, "binding", "Print"])
 
-            s2 = f"org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:{p2}"
+            s2 = f"{schema}.custom-keybinding:{p2}"
             subprocess.run(["gsettings", "set", s2, "name", "Share-L Dashboard"])
             subprocess.run(["gsettings", "set", s2, "command", "/usr/local/bin/share-l"])
             subprocess.run(["gsettings", "set", s2, "binding", "<Ctrl><Shift>Print"])
 
             if not silent:
-                notify("Share-L", "Горячие клавиши Print Screen и Ctrl+Shift+Print успешно привязаны!")
+                notify("Share-L", "Горячие клавиши обновлены (все ваши старые бинды сохранены)!")
         except Exception as e:
             if not silent:
                 notify("Share-L", f"Ошибка привязки: {e}")
@@ -512,9 +547,9 @@ class ShareLDashboard(QMainWindow):
         QTimer.singleShot(250 + delay * 1000, lambda: self._do_capture(mode, was_visible))
 
     def _do_capture(self, mode, restore_window=False):
-        tmp_file = "/tmp/share_l_raw.png"
+        tmp_file = get_secure_temp_file("raw_", "png")
         if not capture_full_screen(tmp_file):
-            notify("Share-L Ошибка", "Не удалось получить снимок экрана Wayland.")
+            notify("Share-L Ошибка", "Не удалось получить снимок экрана.")
             if restore_window:
                 self.show_window()
             return
@@ -524,10 +559,18 @@ class ShareLDashboard(QMainWindow):
             ov.selection = ov.rect()
             ov.capture_completed.connect(lambda fp: self.on_capture_done(fp, restore_window))
             ov.execute_after_capture_tasks()
+            if os.path.exists(tmp_file):
+                try:
+                    os.remove(tmp_file)
+                except Exception:
+                    pass
             return
 
         self.active_overlay = ShareLOverlay(tmp_file, mode=mode)
         self.active_overlay.capture_completed.connect(lambda fp: self.on_capture_done(fp, restore_window))
+        self.active_overlay.destroyed.connect(
+            lambda: os.remove(tmp_file) if os.path.exists(tmp_file) else None
+        )
         if restore_window:
             self.active_overlay.destroyed.connect(self.show_window)
         self.active_overlay.showFullScreen()
