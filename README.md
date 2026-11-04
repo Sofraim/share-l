@@ -18,6 +18,6 @@ sudo apt update && sudo apt install -y \
   libnotify-bin curl xdotool
 pip3 install pynput --break-system-packages
 
-git clone [https://github.com/macssugar/share-l.git](https://github.com/macssugar/share-l.git)
+git clone [https://github.com/sofraim/share-l.git](https://github.com/sofraim/share-l.git)
 cd share-l
 ./install.sh
