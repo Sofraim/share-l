@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "share-l"
+version = "1.0.0"
+description = "Share-L — Native screen capture and productivity tool for Linux (Wayland & X11)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+dependencies = [
+    "PyQt6",
+    "pynput"
+]
+
+[project.scripts]
+share-l = "share_l.main:main"
