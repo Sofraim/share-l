@@ -1,0 +1,10 @@
+Package: share-l
+Version: 1.1.0
+Section: utils
+Priority: optional
+Architecture: all
+Maintainer: Sofraim sofra1m@gmail.com
+Depends: python3 (>= 3.9), python3-pyqt6, python3-pil, python3-zbar, tesseract-ocr, tesseract-ocr-rus, tesseract-ocr-eng, wl-clipboard, xclip, xdotool, curl, ffmpeg, qrencode
+Description: Native screen capture, OCR and productivity tool for Linux (Wayland & X11)
+ Share-L is a powerful screen capture tool inspired by ShareX, built for Linux
+ with full Wayland and X11 support, annotation tools, and secure RAM buffers.
