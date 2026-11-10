@@ -1,7 +1,11 @@
 import os
 import json
+import socket
 import shutil
+import ipaddress
 import subprocess
+from urllib.parse import urlparse
+from PIL import Image
 from .config import cfg, USER_UID
 
 def get_wayland_env():
@@ -33,6 +37,45 @@ def detect_desktop_environment() -> str:
     if "sway" in de:
         return "sway"
     return "generic"
+
+def strip_image_metadata(filepath: str):
+    """Удаляет EXIF, ICC-профили, текстовые чанки и системные метки из изображения."""
+    if not cfg.get("sec_strip_metadata") or not os.path.exists(filepath):
+        return
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        return
+    try:
+        with Image.open(filepath) as img:
+            clean = Image.new(img.mode, img.size)
+            clean.putdata(list(img.getdata()))
+            fmt = "JPEG" if ext in (".jpg", ".jpeg") else ext.lstrip(".").upper()
+            clean.save(filepath, format=fmt, quality=int(cfg.get("jpeg_quality") or 95))
+    except Exception:
+        pass
+
+def is_safe_public_url(url: str) -> bool:
+    """Защита от SSRF (CWE-918): блокирует запросы к localhost, приватным и link-local сетям."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            return False
+        if not cfg.get("sec_ssrf_protection"):
+            return True
+        for res in socket.getaddrinfo(parsed.hostname, 443, proto=socket.IPPROTO_TCP):
+            ip_str = res[4][0]
+            ip_obj = ipaddress.ip_address(ip_str)
+            if (
+                ip_obj.is_private
+                or ip_obj.is_loopback
+                or ip_obj.is_link_local
+                or ip_obj.is_multicast
+                or ip_obj.is_reserved
+            ):
+                return False
+        return True
+    except Exception:
+        return False
 
 def capture_full_screen(tmp_path: str, delay_sec: int = 0) -> bool:
     if os.path.exists(tmp_path):
@@ -127,7 +170,7 @@ def copy_text_to_clipboard(text: str):
 def notify(title: str, body: str, icon_path: str = ""):
     if shutil.which("notify-send"):
         cmd = ["notify-send", "-a", "Share-L", "--", title, body]
-        if icon_path and os.path.exists(icon_path):
+        if icon_path and os.path.exists(icon_path) and icon_path.lower().endswith((".png", ".jpg", ".webp")):
             cmd = ["notify-send", "-a", "Share-L", "-i", icon_path, "--", title, body]
         subprocess.Popen(cmd, env=get_wayland_env())
 
@@ -157,16 +200,19 @@ def generate_qr(text: str, out_path: str) -> bool:
         return res.returncode == 0 and os.path.exists(out_path)
     return False
 
-def upload_file(image_path: str, uploader: str = "0x0.st") -> str:
-    if not shutil.which("curl") or not os.path.exists(image_path):
+def upload_file(file_path: str, uploader: str = "0x0.st") -> str:
+    if not shutil.which("curl") or not os.path.exists(file_path):
         return ""
+
+    strip_image_metadata(file_path)
+    ext = os.path.splitext(file_path)[1].lower() or ".png"
 
     base_curl = [
         "curl", "-sS",
         "--proto", "=https",
         "--tlsv1.2",
         "--connect-timeout", "7",
-        "--max-time", "25"
+        "--max-time", "60"
     ]
 
     try:
@@ -176,15 +222,22 @@ def upload_file(image_path: str, uploader: str = "0x0.st") -> str:
             if not token or not chat_id:
                 notify("Share-L Telegram", "Заполните Bot Token и Chat ID в настройках!")
                 return ""
-            tg_url = f"https://api.telegram.org/bot{token}/sendPhoto"
-            with open(image_path, "rb") as f:
+            if ext == ".mp4":
+                method, field = "sendVideo", "video"
+            elif ext == ".gif":
+                method, field = "sendAnimation", "animation"
+            else:
+                method, field = "sendPhoto", "photo"
+
+            tg_url = f"https://api.telegram.org/bot{token}/{method}"
+            with open(file_path, "rb") as f:
                 res = subprocess.run(
                     base_curl + [
                         "-F", f"chat_id={chat_id}",
-                        "-F", "photo=@-;filename=screenshot.png",
+                        "-F", f"{field}=@-;filename=capture{ext}",
                         tg_url
                     ],
-                    stdin=f, capture_output=True, text=True, timeout=30
+                    stdin=f, capture_output=True, text=True, timeout=65
                 )
             data = json.loads(res.stdout)
             if data.get("ok"):
@@ -200,7 +253,8 @@ def upload_file(image_path: str, uploader: str = "0x0.st") -> str:
         if uploader == "custom":
             url = (cfg.get("custom_sxcu_url") or "").strip()
             field = (cfg.get("custom_sxcu_field") or "file").strip()
-            if not url.startswith("https://"):
+            if not is_safe_public_url(url):
+                notify("Share-L Security", "Запрос заблокирован SSRF-фильтром (недопустимый URL или локальный IP)!")
                 return ""
         else:
             url, field = endpoints.get(uploader, ("https://0x0.st", "file"))
@@ -208,10 +262,10 @@ def upload_file(image_path: str, uploader: str = "0x0.st") -> str:
         cmd = list(base_curl)
         if uploader == "catbox.moe":
             cmd.extend(["-F", "reqtype=fileupload"])
-        cmd.extend(["-F", f"{field}=@-;filename=upload.png", url])
+        cmd.extend(["-F", f"{field}=@-;filename=upload{ext}", url])
 
-        with open(image_path, "rb") as f:
-            res = subprocess.run(cmd, stdin=f, capture_output=True, text=True, timeout=30)
+        with open(file_path, "rb") as f:
+            res = subprocess.run(cmd, stdin=f, capture_output=True, text=True, timeout=65)
         out = res.stdout.strip()
         return out if out.startswith("https://") else ""
     except Exception:

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 WORK_DIR="$(pwd)/build_multi"
 STAGE_DIR="$WORK_DIR/stage"
 DIST_DIR="$(pwd)/dist"

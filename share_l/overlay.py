@@ -10,9 +10,11 @@ from PyQt6.QtGui import (
 )
 from .config import cfg
 from .effects import apply_image_effects
+from .recorder import RecordControlBar
 from .backends import (
     copy_image_to_clipboard, copy_text_to_clipboard, notify,
-    run_ocr, decode_qr, upload_file, get_visible_windows_rects
+    run_ocr, decode_qr, upload_file, get_visible_windows_rects,
+    strip_image_metadata
 )
 
 class PinnedWindow(QWidget):
@@ -90,6 +92,7 @@ class ShareLOverlay(QWidget):
         self.step_counter = 1
         self.annotations = []
         self.current_action = None
+        self.rec_bar = None
 
         self.init_toolbar()
 
@@ -113,11 +116,11 @@ class ShareLOverlay(QWidget):
         tools = [
             ("rect", "▭ Рамка"),
             ("fill_rect", "◼ Заливка"),
-            ("eraser", "🧽 Смарт-ластик"),
+            ("eraser", "🧽 Ластик"),
             ("ellipse", "◯ Круг"),
             ("arrow", "↗ Стрелка"),
             ("pen", "✎ Маркер"),
-            ("highlight", "🖍 Хайлайтер"),
+            ("highlight", "🖍 Хайлайт"),
             ("blur", "▦ Пиксели"),
             ("magnify", "🔎 Линза 2x"),
             ("step", "① Шаг"),
@@ -141,6 +144,16 @@ class ShareLOverlay(QWidget):
         btn_undo.clicked.connect(self.undo_last)
         layout.addWidget(btn_undo)
 
+        btn_vid = QPushButton("🎥 MP4")
+        btn_vid.setToolTip("Записать видео выделенной области")
+        btn_vid.clicked.connect(lambda: self.start_region_recording("mp4"))
+        layout.addWidget(btn_vid)
+
+        btn_gif = QPushButton("🎞 GIF")
+        btn_gif.setToolTip("Записать GIF выделенной области")
+        btn_gif.clicked.connect(lambda: self.start_region_recording("gif"))
+        layout.addWidget(btn_gif)
+
         btn_pin = QPushButton("📌 Pin (P)")
         btn_pin.clicked.connect(self.pin_selection)
         layout.addWidget(btn_pin)
@@ -159,6 +172,14 @@ class ShareLOverlay(QWidget):
         layout.addWidget(btn_save)
 
         self.toolbar.hide()
+
+    def start_region_recording(self, fmt: str):
+        target = self.selection if not self.selection.isNull() and self.selection.width() >= 16 else self.rect()
+        self.hide()
+        self.rec_bar = RecordControlBar(target, fmt=fmt)
+        self.rec_bar.recording_finished.connect(self.capture_completed.emit)
+        self.rec_bar.destroyed.connect(self.close)
+        self.rec_bar.show()
 
     def select_tool(self, key):
         for k, b in self.tool_buttons.items():
@@ -290,6 +311,10 @@ class ShareLOverlay(QWidget):
                     return
                 if self.mode == "qr":
                     self.qr_selection()
+                    return
+                if self.mode in ("record_mp4", "record_gif"):
+                    fmt = "gif" if self.mode == "record_gif" else "mp4"
+                    self.start_region_recording(fmt)
                     return
 
                 if not cfg.get("task_open_editor"):
@@ -554,6 +579,7 @@ class ShareLOverlay(QWidget):
         fp = self.build_save_path()
         fmt = (cfg.get("image_format") or "png").upper()
         crop.save(fp, fmt, int(cfg.get("jpeg_quality") or 95))
+        strip_image_metadata(fp)
         return crop, fp
 
     def execute_after_capture_tasks(self):
@@ -588,7 +614,7 @@ class ShareLOverlay(QWidget):
                 copy_text_to_clipboard(url)
                 notify("Share-L Upload", f"Ссылка в буфере:\n{url}", fp)
         elif cfg.get("task_show_notification"):
-            notify("Share-L", f"Скриншот сохранен и скопирован!\n{os.path.basename(fp)}", fp)
+            notify("Share-L", f"Скриншот сохранен и очищен от метаданных!\n{os.path.basename(fp)}", fp)
 
         cfg.add_history_entry(fp, url=url, ocr_text=ocr_txt)
         self.capture_completed.emit(fp)

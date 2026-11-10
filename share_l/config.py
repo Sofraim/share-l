@@ -58,6 +58,7 @@ DEFAULT_CONFIG = {
     "use_month_subfolder": True,
     "image_format": "png",
     "jpeg_quality": 95,
+    # Задачи после захвата
     "task_open_editor": True,
     "task_add_effects": False,
     "task_copy_image": True,
@@ -68,6 +69,14 @@ DEFAULT_CONFIG = {
     "task_upload": False,
     "task_copy_url": True,
     "task_show_notification": True,
+    # Безопасность (v1.2.0)
+    "sec_strip_metadata": True,
+    "sec_ssrf_protection": True,
+    # Видео и GIF (v1.2.0)
+    "video_fps": 30,
+    "gif_fps": 15,
+    "record_audio": False,
+    # Эффекты
     "fx_border": False,
     "fx_border_color": "#00a8fc",
     "fx_border_size": 2,
@@ -75,11 +84,13 @@ DEFAULT_CONFIG = {
     "fx_shadow_blur": 14,
     "fx_watermark": False,
     "fx_watermark_text": "Share-L",
+    # Прицел и Лупа
     "show_magnifier": True,
     "magnifier_zoom": 8,
     "magnifier_size": 15,
     "show_crosshair": True,
     "smart_window_snap": True,
+    # Хостинги и Telegram API
     "uploader": "0x0.st",
     "tg_bot_token": "",
     "tg_chat_id": "",

@@ -21,36 +21,31 @@ def main():
     drop_root_privileges_safely()
     from .backends import capture_full_screen, notify
 
-    if "--region" in sys.argv:
-        tmp_file = get_secure_temp_file("raw_", "png")
-        if not capture_full_screen(tmp_file):
-            notify("Share-L", "Не удалось захватить экран.")
-            sys.exit(1)
-        os.environ["QT_QPA_PLATFORM"] = "xcb"
-        from PyQt6.QtWidgets import QApplication
-        from .overlay import ShareLOverlay
-        app = QApplication(sys.argv)
-        ov = ShareLOverlay(tmp_file)
-        ov.destroyed.connect(lambda: os.remove(tmp_file) if os.path.exists(tmp_file) else None)
-        ov.showFullScreen()
-        ov.activateWindow()
-        sys.exit(app.exec())
-
-    if "--daemon" in sys.argv:
-        os.environ["QT_QPA_PLATFORM"] = "xcb"
-        from PyQt6.QtWidgets import QApplication
-        from .dashboard import ShareLDashboard
-        app = QApplication(sys.argv)
-        win = ShareLDashboard()
-        win.hide()
-        sys.exit(app.exec())
+    for flag, mode in (("--region", "region"), ("--video", "record_mp4"), ("--gif", "record_gif")):
+        if flag in sys.argv:
+            tmp_file = get_secure_temp_file("raw_", "png")
+            if not capture_full_screen(tmp_file):
+                notify("Share-L", "Не удалось захватить экран.")
+                sys.exit(1)
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+            from PyQt6.QtWidgets import QApplication
+            from .overlay import ShareLOverlay
+            app = QApplication(sys.argv)
+            ov = ShareLOverlay(tmp_file, mode=mode)
+            ov.destroyed.connect(lambda: os.remove(tmp_file) if os.path.exists(tmp_file) else None)
+            ov.showFullScreen()
+            ov.activateWindow()
+            sys.exit(app.exec())
 
     os.environ["QT_QPA_PLATFORM"] = "xcb"
     from PyQt6.QtWidgets import QApplication
     from .dashboard import ShareLDashboard
     app = QApplication(sys.argv)
     win = ShareLDashboard()
-    win.show()
+    if "--daemon" in sys.argv:
+        win.hide()
+    else:
+        win.show()
     sys.exit(app.exec())
 
 if __name__ == "__main__":

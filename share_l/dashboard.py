@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QFormLayout, QSystemTrayIcon, QMenu, QStyle, QSplitter
 )
 from PyQt6.QtCore import Qt, QSize, QTimer, QObject, pyqtSignal
-from PyQt6.QtGui import QPixmap, QIcon, QAction
+from PyQt6.QtGui import QPixmap, QIcon, QAction, QMovie
 from .config import cfg, get_secure_temp_file
 from .backends import (
     capture_full_screen, copy_image_to_clipboard, upload_file,
@@ -32,10 +32,11 @@ class HotkeyBridge(QObject):
 class ShareLDashboard(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Share-L")
-        self.resize(1060, 660)
+        self.setWindowTitle("Share-L v1.2.0")
+        self.resize(1080, 680)
         self.active_overlay = None
         self.force_quit = False
+        self.current_movie = None
 
         QApplication.instance().setQuitOnLastWindowClosed(False)
 
@@ -73,13 +74,13 @@ class ShareLDashboard(QMainWindow):
         root_layout.setSpacing(0)
 
         sidebar = QWidget()
-        sidebar.setFixedWidth(240)
+        sidebar.setFixedWidth(245)
         sidebar.setStyleSheet("background-color: #111214; border-right: 1px solid #2b2d31;")
         sb_layout = QVBoxLayout(sidebar)
         sb_layout.setContentsMargins(10, 14, 10, 14)
         sb_layout.setSpacing(6)
 
-        title_lbl = QLabel("⚡ Share-L v1.1")
+        title_lbl = QLabel("⚡ Share-L v1.2")
         title_lbl.setStyleSheet("font-size: 20px; font-weight: bold; color: #00a8fc; padding: 6px 4px;")
         sb_layout.addWidget(title_lbl)
 
@@ -88,21 +89,27 @@ class ShareLDashboard(QMainWindow):
         btn_quick_region.clicked.connect(lambda: self.trigger_capture("region", 0))
         sb_layout.addWidget(btn_quick_region)
 
+        btn_rec_mp4 = QPushButton("🎥 Запись видео (MP4)")
+        btn_rec_mp4.setStyleSheet("background-color: #9e2a2b; border-color: #e05252;")
+        btn_rec_mp4.clicked.connect(lambda: self.trigger_capture("record_mp4", 0))
+        sb_layout.addWidget(btn_rec_mp4)
+
+        btn_rec_gif = QPushButton("🎞 Запись анимации (GIF)")
+        btn_rec_gif.clicked.connect(lambda: self.trigger_capture("record_gif", 0))
+        sb_layout.addWidget(btn_rec_gif)
+
         btn_quick_full = QPushButton("🖥 Весь экран")
         btn_quick_full.clicked.connect(lambda: self.trigger_capture("fullscreen", 0))
         sb_layout.addWidget(btn_quick_full)
 
-        btn_quick_delay = QPushButton("⏱ С задержкой (3 сек)")
-        btn_quick_delay.clicked.connect(lambda: self.trigger_capture("region", 3))
-        sb_layout.addWidget(btn_quick_delay)
-
-        sb_layout.addSpacing(8)
+        sb_layout.addSpacing(6)
 
         self.nav_list = QListWidget()
         self.nav_list.setStyleSheet("border: none; background: transparent;")
         nav_items = [
-            "📋 История снимков",
-            "☑ Задачи после захвата",
+            "📋 История (Снимки и Видео)",
+            "☑ Задачи и Безопасность",
+            "🎥 Запись экрана (MP4 / GIF)",
             "✨ Эффекты (Тень / Рамка)",
             "⚙ Настройки и Хостинги",
             "🛠 Инструменты Share-L",
@@ -114,7 +121,7 @@ class ShareLDashboard(QMainWindow):
         self.nav_list.currentRowChanged.connect(self.switch_page)
         sb_layout.addWidget(self.nav_list, 1)
 
-        btn_open_dir = QPushButton("📂 Открыть папку скринов")
+        btn_open_dir = QPushButton("📂 Открыть папку файлов")
         btn_open_dir.clicked.connect(self.open_screenshots_folder)
         sb_layout.addWidget(btn_open_dir)
 
@@ -123,6 +130,7 @@ class ShareLDashboard(QMainWindow):
         self.pages = QStackedWidget()
         self.pages.addWidget(self.build_history_page())
         self.pages.addWidget(self.build_after_capture_page())
+        self.pages.addWidget(self.build_recorder_settings_page())
         self.pages.addWidget(self.build_effects_page())
         self.pages.addWidget(self.build_settings_page())
         self.pages.addWidget(self.build_tools_page())
@@ -164,7 +172,7 @@ class ShareLDashboard(QMainWindow):
         rp_layout = QVBoxLayout(right_panel)
         rp_layout.setContentsMargins(8, 0, 0, 0)
 
-        self.preview_lbl = QLabel("Сделайте первый скриншот или выберите из списка")
+        self.preview_lbl = QLabel("Сделайте первый скриншот или запись экрана")
         self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_lbl.setStyleSheet("background: #111214; border: 1px solid #2b2d31; border-radius: 6px;")
         rp_layout.addWidget(self.preview_lbl, 1)
@@ -174,24 +182,24 @@ class ShareLDashboard(QMainWindow):
         rp_layout.addWidget(self.file_info_lbl)
 
         act_bar = QHBoxLayout()
+        btn_open = QPushButton("▶ Открыть файл")
+        btn_open.clicked.connect(self.open_selected_file)
         btn_edit = QPushButton("✏ В редактор")
         btn_edit.clicked.connect(self.edit_selected)
         btn_cp = QPushButton("📋 Копировать")
         btn_cp.clicked.connect(self.copy_current)
-        btn_ocr = QPushButton("🔍 OCR текст")
-        btn_ocr.clicked.connect(self.ocr_current)
         btn_up = QPushButton("☁ Загрузить (URL)")
         btn_up.clicked.connect(self.upload_current)
         btn_del = QPushButton("🗑 Удалить")
         btn_del.setStyleSheet("background-color: #a12828;")
         btn_del.clicked.connect(self.delete_current)
 
-        for b in (btn_edit, btn_cp, btn_ocr, btn_up, btn_del):
+        for b in (btn_open, btn_edit, btn_cp, btn_up, btn_del):
             act_bar.addWidget(b)
         rp_layout.addLayout(act_bar)
 
         splitter.addWidget(right_panel)
-        splitter.setSizes([300, 500])
+        splitter.setSizes([310, 520])
         layout.addWidget(splitter)
         return page
 
@@ -200,18 +208,18 @@ class ShareLDashboard(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        grp = QGroupBox("Задачи после захвата (After Capture Tasks — работают автоматически)")
+        grp = QGroupBox("Задачи после захвата (After Capture Tasks)")
         vbox = QVBoxLayout(grp)
 
         tasks = [
             ("task_open_editor", "Открывать встроенный редактор аннотаций Share-L после выделения области"),
             ("task_add_effects", "Применять эффекты изображения (Тень / Обводка / Водяной знак)"),
             ("task_copy_image", "Копировать изображение в буфер обмена (Wayland / X11)"),
-            ("task_save_file", "Сохранять изображение в файл на диске"),
+            ("task_save_file", "Сохранять изображение или видео в файл на диске"),
             ("task_pin_to_screen", "Автоматически закреплять скриншот поверх всех окон (Pin to Screen)"),
             ("task_run_ocr", "Автоматически распознавать текст (OCR RU/EN) и копировать в буфер"),
             ("task_scan_qr", "Автоматически сканировать QR-коды на скриншоте"),
-            ("task_upload", "Автоматически загружать скриншот на выбранный хостинг / Telegram"),
+            ("task_upload", "Автоматически загружать файл на выбранный хостинг / Telegram"),
             ("task_copy_url", "Копировать прямую ссылку в буфер обмена после загрузки"),
             ("task_show_notification", "Показывать системное всплывающее уведомление с превью")
         ]
@@ -221,6 +229,50 @@ class ShareLDashboard(QMainWindow):
             cb.setChecked(bool(cfg.get(key)))
             cb.toggled.connect(lambda checked, k=key: cfg.set(k, checked))
             vbox.addWidget(cb)
+
+        layout.addWidget(grp)
+
+        grp_sec = QGroupBox("Защита и Приватность (Security Hardening II)")
+        vbox_sec = QVBoxLayout(grp_sec)
+
+        cb_exif = QCheckBox("Автоматически очищать EXIF, цветовые профили и метаданные из всех скриншотов")
+        cb_exif.setChecked(bool(cfg.get("sec_strip_metadata")))
+        cb_exif.toggled.connect(lambda v: cfg.set("sec_strip_metadata", v))
+        vbox_sec.addWidget(cb_exif)
+
+        cb_ssrf = QCheckBox("Включить защиту от SSRF (блокировать отправку на локальные и приватные IP)")
+        cb_ssrf.setChecked(bool(cfg.get("sec_ssrf_protection")))
+        cb_ssrf.toggled.connect(lambda v: cfg.set("sec_ssrf_protection", v))
+        vbox_sec.addWidget(cb_ssrf)
+
+        layout.addWidget(grp_sec)
+        layout.addStretch(1)
+        return page
+
+    def build_recorder_settings_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        grp = QGroupBox("Движок записи экрана (Motion Engine: PipeWire / GNOME D-Bus / FFmpeg)")
+        form = QFormLayout(grp)
+
+        spin_vfps = QSpinBox()
+        spin_vfps.setRange(10, 60)
+        spin_vfps.setValue(int(cfg.get("video_fps") or 30))
+        spin_vfps.valueChanged.connect(lambda v: cfg.set("video_fps", v))
+        form.addRow("Частота кадров видео (MP4 FPS):", spin_vfps)
+
+        spin_gfps = QSpinBox()
+        spin_gfps.setRange(5, 30)
+        spin_gfps.setValue(int(cfg.get("gif_fps") or 15))
+        spin_gfps.valueChanged.connect(lambda v: cfg.set("gif_fps", v))
+        form.addRow("Частота кадров анимации (GIF FPS):", spin_gfps)
+
+        cb_aud = QCheckBox("Записывать звук с аудиовыхода / микрофона по умолчанию (PulseAudio / PipeWire)")
+        cb_aud.setChecked(bool(cfg.get("record_audio")))
+        cb_aud.toggled.connect(lambda v: cfg.set("record_audio", v))
+        form.addRow("", cb_aud)
 
         layout.addWidget(grp)
         layout.addStretch(1)
@@ -277,7 +329,7 @@ class ShareLDashboard(QMainWindow):
         btn_browse.clicked.connect(self.choose_save_dir)
         dir_row.addWidget(self.dir_edit, 1)
         dir_row.addWidget(btn_browse)
-        form_paths.addRow("Папка для скриншотов:", dir_row)
+        form_paths.addRow("Папка для файлов:", dir_row)
 
         self.pattern_edit = QLineEdit(cfg.get("filename_pattern"))
         self.pattern_edit.textChanged.connect(lambda val: cfg.set("filename_pattern", val))
@@ -292,37 +344,11 @@ class ShareLDashboard(QMainWindow):
         fmt_combo.addItems(["png", "jpg", "webp"])
         fmt_combo.setCurrentText(cfg.get("image_format"))
         fmt_combo.currentTextChanged.connect(lambda val: cfg.set("image_format", val))
-        form_paths.addRow("Формат изображения:", fmt_combo)
+        form_paths.addRow("Формат скриншотов:", fmt_combo)
 
         layout.addWidget(grp_paths)
 
-        grp_mag = QGroupBox("Настройки прицела, лупы и автоопределения окон")
-        form_mag = QFormLayout(grp_mag)
-
-        cb_mag = QCheckBox("Показывать пиксельную лупу возле курсора")
-        cb_mag.setChecked(bool(cfg.get("show_magnifier")))
-        cb_mag.toggled.connect(lambda val: cfg.set("show_magnifier", val))
-        form_mag.addRow("", cb_mag)
-
-        cb_cross = QCheckBox("Показывать перекрестие на весь экран")
-        cb_cross.setChecked(bool(cfg.get("show_crosshair")))
-        cb_cross.toggled.connect(lambda val: cfg.set("show_crosshair", val))
-        form_mag.addRow("", cb_cross)
-
-        cb_snap = QCheckBox("Автоматически подсвечивать границы окон под курсором")
-        cb_snap.setChecked(bool(cfg.get("smart_window_snap")))
-        cb_snap.toggled.connect(lambda val: cfg.set("smart_window_snap", val))
-        form_mag.addRow("", cb_snap)
-
-        spin_zoom = QSpinBox()
-        spin_zoom.setRange(4, 16)
-        spin_zoom.setValue(int(cfg.get("magnifier_zoom")))
-        spin_zoom.valueChanged.connect(lambda val: cfg.set("magnifier_zoom", val))
-        form_mag.addRow("Кратность увеличения лупы:", spin_zoom)
-
-        layout.addWidget(grp_mag)
-
-        grp_up = QGroupBox("Загрузчик изображений и интеграция с Telegram (хранится с правами 0600)")
+        grp_up = QGroupBox("Загрузчик и интеграция с Telegram (хранится с правами 0600)")
         form_up = QFormLayout(grp_up)
         up_combo = QComboBox()
         up_combo.addItems(["0x0.st", "x0.at", "catbox.moe", "telegram", "custom"])
@@ -396,18 +422,14 @@ class ShareLDashboard(QMainWindow):
 
         info = QLabel(
             "Активные системные сочетания клавиш:\n\n"
-            "• Print Screen — Захват области с лупой и редактором Share-L\n"
-            "• Ctrl + Shift + Print — Открыть главное окно Share-L\n\n"
-            "Внутри режима выделения области:\n"
-            "• Enter / Двойной клик — Сохранить и скопировать в буфер\n"
-            "• C — Скопировать HEX-цвет пикселя под лупой\n"
-            "• P — Закрепить область поверх всех окон (Pin to Screen)\n"
-            "• O — Распознать текст (OCR) в буфер обмена\n"
-            "• U — Загрузить на хостинг / в Telegram"
+            "• Print Screen — Захват области с лупой, редактором и кнопками записи MP4/GIF\n"
+            "• Shift + Print — Мгновенный выбор области для записи Видео (MP4)\n"
+            "• Alt + Print — Мгновенный выбор области для записи Анимации (GIF)\n"
+            "• Ctrl + Shift + Print — Открыть главное окно Share-L"
         )
         vbox.addWidget(info)
 
-        btn_bind = QPushButton("⚡ Прописать горячие клавиши Share-L (сохранив все существующие)")
+        btn_bind = QPushButton("⚡ Обновить горячие клавиши Share-L (сохранив все существующие)")
         btn_bind.setStyleSheet("background-color: #238636; padding: 12px;")
         btn_bind.clicked.connect(lambda: self.bind_gnome_hotkey(silent=False))
         vbox.addWidget(btn_bind)
@@ -426,8 +448,13 @@ class ShareLDashboard(QMainWindow):
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             schema = "org.gnome.settings-daemon.plugins.media-keys"
-            p1 = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/share-l-region/"
-            p2 = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/share-l-gui/"
+            base = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings"
+            bindings = [
+                (f"{base}/share-l-region/", "Share-L Region Capture", "/usr/local/bin/share-l --region", "Print"),
+                (f"{base}/share-l-video/", "Share-L Video Record", "/usr/local/bin/share-l --video", "<Shift>Print"),
+                (f"{base}/share-l-gif/", "Share-L GIF Record", "/usr/local/bin/share-l --gif", "<Alt>Print"),
+                (f"{base}/share-l-gui/", "Share-L Dashboard", "/usr/local/bin/share-l", "<Ctrl><Shift>Print"),
+            ]
 
             cur_raw = subprocess.check_output(
                 ["gsettings", "get", schema, "custom-keybindings"], text=True
@@ -443,27 +470,23 @@ class ShareLDashboard(QMainWindow):
 
             cur_list = [p for p in cur_list if "sharex" not in p]
 
-            for p in (p1, p2):
-                if p not in cur_list:
-                    cur_list.append(p)
+            for path, _, _, _ in bindings:
+                if path not in cur_list:
+                    cur_list.append(path)
 
             subprocess.run(
                 ["gsettings", "set", schema, "custom-keybindings", str(cur_list)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
 
-            s1 = f"{schema}.custom-keybinding:{p1}"
-            subprocess.run(["gsettings", "set", s1, "name", "Share-L Region Capture"])
-            subprocess.run(["gsettings", "set", s1, "command", "/usr/local/bin/share-l --region"])
-            subprocess.run(["gsettings", "set", s1, "binding", "Print"])
-
-            s2 = f"{schema}.custom-keybinding:{p2}"
-            subprocess.run(["gsettings", "set", s2, "name", "Share-L Dashboard"])
-            subprocess.run(["gsettings", "set", s2, "command", "/usr/local/bin/share-l"])
-            subprocess.run(["gsettings", "set", s2, "binding", "<Ctrl><Shift>Print"])
+            for path, name, cmd, key in bindings:
+                s = f"{schema}.custom-keybinding:{path}"
+                subprocess.run(["gsettings", "set", s, "name", name])
+                subprocess.run(["gsettings", "set", s, "command", cmd])
+                subprocess.run(["gsettings", "set", s, "binding", key])
 
             if not silent:
-                notify("Share-L", "Горячие клавиши обновлены (все ваши старые бинды сохранены)!")
+                notify("Share-L", "Горячие клавиши для скриншотов и записи MP4/GIF обновлены!")
         except Exception as e:
             if not silent:
                 notify("Share-L", f"Ошибка привязки: {e}")
@@ -496,16 +519,18 @@ class ShareLDashboard(QMainWindow):
         menu = QMenu()
         act_reg = QAction("📸 Захват области (Print)", self)
         act_reg.triggered.connect(lambda: self.trigger_capture("region", 0))
+        act_vid = QAction("🎥 Запись видео MP4 (Shift+Print)", self)
+        act_vid.triggered.connect(lambda: self.trigger_capture("record_mp4", 0))
+        act_gif = QAction("🎞 Запись анимации GIF (Alt+Print)", self)
+        act_gif.triggered.connect(lambda: self.trigger_capture("record_gif", 0))
         act_full = QAction("🖥 Весь экран", self)
         act_full.triggered.connect(lambda: self.trigger_capture("fullscreen", 0))
-        act_ocr = QAction("🔍 OCR Распознать текст", self)
-        act_ocr.triggered.connect(lambda: self.trigger_capture("ocr", 0))
         act_show = QAction("⚡ Открыть окно Share-L", self)
         act_show.triggered.connect(self.show_window)
         act_quit = QAction("❌ Полный выход", self)
         act_quit.triggered.connect(self.quit_app)
 
-        for a in (act_reg, act_full, act_ocr):
+        for a in (act_reg, act_vid, act_gif, act_full):
             menu.addAction(a)
         menu.addSeparator()
         menu.addAction(act_show)
@@ -528,7 +553,7 @@ class ShareLDashboard(QMainWindow):
         QApplication.quit()
 
     def choose_save_dir(self):
-        d = QFileDialog.getExistingDirectory(self, "Выберите папку для сохранения скриншотов", cfg.get("save_dir"))
+        d = QFileDialog.getExistingDirectory(self, "Выберите папку для сохранения", cfg.get("save_dir"))
         if d:
             self.dir_edit.setText(d)
             cfg.set("save_dir", d)
@@ -571,8 +596,6 @@ class ShareLDashboard(QMainWindow):
         self.active_overlay.destroyed.connect(
             lambda: os.remove(tmp_file) if os.path.exists(tmp_file) else None
         )
-        if restore_window:
-            self.active_overlay.destroyed.connect(self.show_window)
         self.active_overlay.showFullScreen()
         self.active_overlay.activateWindow()
 
@@ -587,11 +610,13 @@ class ShareLDashboard(QMainWindow):
         pattern = os.path.join(save_dir, "**", "*.*")
         files = [
             f for f in glob.glob(pattern, recursive=True)
-            if f.lower().endswith((".png", ".jpg", ".webp"))
+            if f.lower().endswith((".png", ".jpg", ".webp", ".mp4", ".gif"))
         ]
         files.sort(key=os.path.getmtime, reverse=True)
+        vid_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay)
         for fp in files[:100]:
-            item = QListWidgetItem(QIcon(fp), os.path.basename(fp))
+            icon = vid_icon if fp.lower().endswith(".mp4") else QIcon(fp)
+            item = QListWidgetItem(icon, os.path.basename(fp))
             item.setData(Qt.ItemDataRole.UserRole, fp)
             self.list_widget.addItem(item)
         if self.list_widget.count() > 0:
@@ -602,26 +627,44 @@ class ShareLDashboard(QMainWindow):
         return it.data(Qt.ItemDataRole.UserRole) if it else None
 
     def on_select_history(self, current, _):
+        if self.current_movie:
+            self.current_movie.stop()
+            self.current_movie = None
         if not current:
             return
         fp = current.data(Qt.ItemDataRole.UserRole)
         if not os.path.exists(fp):
             return
-        pix = QPixmap(fp)
-        self.preview_lbl.setPixmap(pix.scaled(
-            540, 450, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-        ))
         sz_kb = os.path.getsize(fp) // 1024
-        self.file_info_lbl.setText(f"Файл: {fp}  |  {pix.width()}×{pix.height()} px  |  {sz_kb} КБ")
+        if fp.lower().endswith(".mp4"):
+            self.preview_lbl.setPixmap(QPixmap())
+            self.preview_lbl.setText(f"🎥 Видеофайл MP4: {os.path.basename(fp)}\n\nНажмите «▶ Открыть файл» для воспроизведения")
+            self.file_info_lbl.setText(f"Видео: {fp}  |  {sz_kb} КБ")
+        elif fp.lower().endswith(".gif"):
+            self.current_movie = QMovie(fp)
+            self.preview_lbl.setMovie(self.current_movie)
+            self.current_movie.start()
+            self.file_info_lbl.setText(f"Анимация GIF: {fp}  |  {sz_kb} КБ")
+        else:
+            pix = QPixmap(fp)
+            self.preview_lbl.setPixmap(pix.scaled(
+                540, 450, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            ))
+            self.file_info_lbl.setText(f"Файл: {fp}  |  {pix.width()}×{pix.height()} px  |  {sz_kb} КБ")
+
+    def open_selected_file(self):
+        fp = self.current_file()
+        if fp and os.path.exists(fp):
+            subprocess.Popen(["xdg-open", fp])
 
     def show_history_context_menu(self, pos):
         if not self.current_file():
             return
         menu = QMenu(self)
-        menu.addAction("📋 Копировать картинку", self.copy_current)
+        menu.addAction("▶ Открыть в системном плеере/просмотрщике", self.open_selected_file)
+        menu.addAction("📋 Копировать", self.copy_current)
         menu.addAction("✏ Открыть в редакторе Share-L", self.edit_selected)
         menu.addAction("🔍 Распознать текст (OCR)", self.ocr_current)
-        menu.addAction("📷 Декодировать QR-код", self.qr_current)
         menu.addAction("☁ Загрузить и скопировать ссылку", self.upload_current)
         menu.addSeparator()
         menu.addAction("📂 Показать в проводнике", lambda: subprocess.Popen(["xdg-open", os.path.dirname(self.current_file())]))
@@ -630,7 +673,7 @@ class ShareLDashboard(QMainWindow):
 
     def edit_selected(self):
         fp = self.current_file()
-        if fp and os.path.exists(fp):
+        if fp and os.path.exists(fp) and fp.lower().endswith((".png", ".jpg", ".webp")):
             self.active_overlay = ShareLOverlay(fp)
             self.active_overlay.selection = self.active_overlay.rect()
             self.active_overlay.position_toolbar()
@@ -639,29 +682,24 @@ class ShareLDashboard(QMainWindow):
 
     def copy_current(self):
         fp = self.current_file()
-        if fp:
+        if not fp:
+            return
+        if fp.lower().endswith((".png", ".jpg", ".webp")):
             copy_image_to_clipboard(fp)
             notify("Share-L", "Изображение скопировано в буфер обмена!", fp)
+        else:
+            copy_text_to_clipboard(fp)
+            notify("Share-L", "Путь к видеофайлу скопирован в буфер обмена!")
 
     def ocr_current(self):
         fp = self.current_file()
-        if fp:
+        if fp and fp.lower().endswith((".png", ".jpg", ".webp")):
             txt = run_ocr(fp)
             if txt:
                 copy_text_to_clipboard(txt)
                 notify("Share-L OCR", f"Скопирован текст:\n{txt[:120]}", fp)
             else:
                 notify("Share-L OCR", "Текст не найден", fp)
-
-    def qr_current(self):
-        fp = self.current_file()
-        if fp:
-            txt = decode_qr(fp)
-            if txt:
-                copy_text_to_clipboard(txt)
-                notify("Share-L QR", f"Декодировано:\n{txt}", fp)
-            else:
-                notify("Share-L QR", "QR-код не найден", fp)
 
     def upload_current(self):
         fp = self.current_file()
